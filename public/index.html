@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>海关商品归类讨论网</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="app">
+        <div id="auth-container" class="auth-container">
+            <div id="login-form">
+                <h2>登录</h2>
+                <form onsubmit="handleLogin(event)">
+                    <input type="text" id="login-username" placeholder="用户名" required>
+                    <input type="password" id="login-password" placeholder="密码" required>
+                    <button type="submit">登录</button>
+                </form>
+                <p>还没有账号？<a href="#" onclick="showRegister()">立即注册</a></p>
+            </div>
+            <div id="register-form" style="display: none;">
+                <h2>注册</h2>
+                <form onsubmit="handleRegister(event)">
+                    <input type="text" id="register-username" placeholder="用户名" required>
+                    <input type="password" id="register-password" placeholder="密码" required>
+                    <select id="register-role" required>
+                        <option value="">选择身份</option>
+                        <option value="alumni">校友</option>
+                        <option value="student">在校生</option>
+                        <option value="teacher">教师</option>
+                    </select>
+                    <button type="submit">注册</button>
+                </form>
+                <p>已有账号？<a href="#" onclick="showLogin()">立即登录</a></p>
+            </div>
+        </div>
+
+        <div id="main-container" class="main-container" style="display: none;">
+            <header class="header">
+                <div class="header-title">海关商品归类讨论网</div>
+                <div class="header-user">
+                    <span id="user-info"></span>
+                    <button onclick="showNotifications()" id="notification-btn">通知</button>
+                    <button onclick="logout()">退出</button>
+                </div>
+            </header>
+
+            <nav class="navigation">
+                <button onclick="switchSection('alumni')" id="nav-alumni" class="nav-btn active">校友板块</button>
+                <button onclick="switchSection('student')" id="nav-student" class="nav-btn">在校生板块</button>
+                <button onclick="showAdminPanel()" id="admin-btn" style="display: none;">管理面板</button>
+            </nav>
+
+            <div class="search-bar">
+                <input type="text" id="search-input" placeholder="搜索问题...">
+                <button onclick="searchQuestions()">搜索</button>
+                <button onclick="showAskQuestionModal()" class="ask-btn">发布问题</button>
+            </div>
+
+            <div class="content-wrapper">
+                <aside class="sidebar">
+                    <h3>问题分类</h3>
+                    <div class="category-list">
+                        <button onclick="filterByCategory('')" class="category-item active" data-category="">全部</button>
+                        <button onclick="filterByCategory('动植物产品')" class="category-item" data-category="动植物产品">动植物产品</button>
+                        <button onclick="filterByCategory('矿化产品')" class="category-item" data-category="矿化产品">矿化产品</button>
+                        <button onclick="filterByCategory('纺织产品')" class="category-item" data-category="纺织产品">纺织产品</button>
+                        <button onclick="filterByCategory('金属制品')" class="category-item" data-category="金属制品">金属制品</button>
+                        <button onclick="filterByCategory('机电及仪器仪表')" class="category-item" data-category="机电及仪器仪表">机电及仪器仪表</button>
+                        <button onclick="filterByCategory('交通运输设备')" class="category-item" data-category="交通运输设备">交通运输设备</button>
+                        <button onclick="filterByCategory('其他商品')" class="category-item" data-category="其他商品">其他商品</button>
+                    </div>
+                </aside>
+
+                <main class="main-content">
+                    <div id="questions-list"></div>
+                </main>
+            </div>
+        </div>
+
+        <div id="question-modal" class="modal">
+            <div class="modal-content">
+                <span class="close" onclick="closeModal()">&times;</span>
+                <div id="modal-body"></div>
+            </div>
+        </div>
+
+        <div id="notifications-panel" class="notifications-panel">
+            <div class="notifications-header">
+                <h3>通知</h3>
+                <span class="close" onclick="closeNotifications()">&times;</span>
+            </div>
+            <div id="notifications-list"></div>
+        </div>
+
+        <div id="admin-panel" class="modal">
+            <div class="modal-content admin-content">
+                <span class="close" onclick="closeModal()">&times;</span>
+                <h2>管理面板</h2>
+                <div class="admin-tabs">
+                    <button onclick="showAdminTab('users')" class="admin-tab active" data-tab="users">用户管理</button>
+                </div>
+                <div id="admin-users" class="admin-tab-content"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
