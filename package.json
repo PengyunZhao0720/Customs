@@ -1,0 +1,20 @@
+{
+  "name": "qna-website",
+  "version": "1.0.0",
+  "description": "答疑网站 - 校友、在校生与教师问答平台",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "keywords": ["qna", "forum", "education"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.18.2",
+    "sqlite3": "^5.1.6",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "body-parser": "^1.20.2"
+  }
+}
