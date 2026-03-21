@@ -368,6 +368,35 @@ app.delete('/api/users/:id', async (req, res) => {
   }
 });
 
+// 数据库备份接口
+app.get('/api/backup', async (req, res) => {
+  try {
+    const users = await pool.query('SELECT * FROM users ORDER BY id');
+    const questions = await pool.query('SELECT * FROM questions ORDER BY id');
+    const answers = await pool.query('SELECT * FROM answers ORDER BY id');
+    const notifications = await pool.query('SELECT * FROM notifications ORDER BY id');
+    const follows = await pool.query('SELECT * FROM follows ORDER BY id');
+
+    const backup = {
+      backup_date: new Date().toISOString(),
+      source: 'Render PostgreSQL',
+      tables: {
+        users: users.rows,
+        questions: questions.rows,
+        answers: answers.rows,
+        notifications: notifications.rows,
+        follows: follows.rows
+      }
+    };
+
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', `attachment; filename="backup_${new Date().toISOString().slice(0, 10)}.json"`);
+    res.json(backup);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
