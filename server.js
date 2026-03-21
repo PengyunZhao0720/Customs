@@ -1,129 +1,130 @@
 const express = require('express');
-const sqlite3 = require('sqlite3').verbose();
+const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const path = require('path');
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(bodyParser.json());
 app.use(express.static('public'));
 
-const db = new sqlite3.Database('./qna.db', (err) => {
-  if (err) {
-    console.error(err.message);
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false
   }
-  console.log('Connected to the Q&A database.');
-  initDatabase();
 });
 
-function initDatabase() {
-  db.serialize(() => {
-    db.run(`CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      username TEXT UNIQUE NOT NULL,
-      password TEXT NOT NULL,
-      role TEXT NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`);
+async function initDatabase() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        username TEXT UNIQUE NOT NULL,
+        password TEXT NOT NULL,
+        role TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
 
-    db.run(`CREATE TABLE IF NOT EXISTS questions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      title TEXT NOT NULL,
-      content TEXT NOT NULL,
-      category TEXT NOT NULL,
-      user_id INTEGER NOT NULL,
-      section TEXT NOT NULL,
-      status TEXT DEFAULT 'open',
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (user_id) REFERENCES users(id)
-    )`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS questions (
+        id SERIAL PRIMARY KEY,
+        title TEXT NOT NULL,
+        content TEXT NOT NULL,
+        category TEXT NOT NULL,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        section TEXT NOT NULL,
+        status TEXT DEFAULT 'open',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
 
-    db.run(`CREATE TABLE IF NOT EXISTS answers (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      content TEXT NOT NULL,
-      question_id INTEGER NOT NULL,
-      user_id INTEGER NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (question_id) REFERENCES questions(id),
-      FOREIGN KEY (user_id) REFERENCES users(id)
-    )`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS answers (
+        id SERIAL PRIMARY KEY,
+        content TEXT NOT NULL,
+        question_id INTEGER NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
 
-    db.run(`CREATE TABLE IF NOT EXISTS notifications (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER NOT NULL,
-      question_id INTEGER,
-      message TEXT NOT NULL,
-      is_read INTEGER DEFAULT 0,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (user_id) REFERENCES users(id),
-      FOREIGN KEY (question_id) REFERENCES questions(id)
-    )`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS notifications (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        question_id INTEGER REFERENCES questions(id) ON DELETE CASCADE,
+        message TEXT NOT NULL,
+        is_read INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
 
-    db.run(`CREATE TABLE IF NOT EXISTS follows (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      question_id INTEGER NOT NULL,
-      user_id INTEGER NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (question_id) REFERENCES questions(id),
-      FOREIGN KEY (user_id) REFERENCES users(id),
-      UNIQUE(question_id, user_id)
-    )`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS follows (
+        id SERIAL PRIMARY KEY,
+        question_id INTEGER NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(question_id, user_id)
+      )
+    `);
 
-    const checkUsers = db.prepare("SELECT COUNT(*) as count FROM users");
-    checkUsers.get((err, row) => {
-      if (err) {
-        console.error(err.message);
-        return;
-      }
-      if (row.count === 0) {
-        const insertUser = db.prepare("INSERT INTO users (username, password, role) VALUES (?, ?, ?)");
-        const hashedPassword = bcrypt.hashSync('admin123', 8);
-        insertUser.run('admin', hashedPassword, 'teacher', (err) => {
-          if (!err) {
-            console.log('Default admin user created: admin / admin123');
-          }
-        });
-        insertUser.finalize();
-      }
-    });
-    checkUsers.finalize();
-  });
+    const result = await pool.query("SELECT COUNT(*) as count FROM users");
+    if (parseInt(result.rows[0].count) === 0) {
+      const hashedPassword = bcrypt.hashSync('admin123', 8);
+      await pool.query(
+        "INSERT INTO users (username, password, role) VALUES ($1, $2, $3)",
+        ['admin', hashedPassword, 'teacher']
+      );
+      console.log('Default admin user created: admin / admin123');
+    }
+
+    console.log('Connected to the Q&A database.');
+  } catch (err) {
+    console.error('Database initialization error:', err.message);
+  }
 }
 
-app.post('/api/register', (req, res) => {
+initDatabase();
+
+app.post('/api/register', async (req, res) => {
   const { username, password, role } = req.body;
   const hashedPassword = bcrypt.hashSync(password, 8);
 
-  db.run("INSERT INTO users (username, password, role) VALUES (?, ?, ?)",
-    [username, hashedPassword, role],
-    function(err) {
-      if (err) {
-        return res.status(400).json({ error: "Username already exists" });
-      }
-      res.json({ id: this.lastID, username, role });
-    }
-  );
+  try {
+    const result = await pool.query(
+      "INSERT INTO users (username, password, role) VALUES ($1, $2, $3) RETURNING id",
+      [username, hashedPassword, role]
+    );
+    res.json({ id: result.rows[0].id, username, role });
+  } catch (err) {
+    res.status(400).json({ error: "Username already exists" });
+  }
 });
 
-app.post('/api/login', (req, res) => {
+app.post('/api/login', async (req, res) => {
   const { username, password } = req.body;
 
-  db.get("SELECT * FROM users WHERE username = ?", [username], (err, user) => {
-    if (err) {
-      return res.status(500).json({ error: err.message });
-    }
+  try {
+    const result = await pool.query("SELECT * FROM users WHERE username = $1", [username]);
+    const user = result.rows[0];
+    
     if (!user || !bcrypt.compareSync(password, user.password)) {
       return res.status(401).json({ error: "Invalid credentials" });
     }
     res.json({ id: user.id, username: user.username, role: user.role });
-  });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.get('/api/questions', (req, res) => {
+app.get('/api/questions', async (req, res) => {
   const { section, category, search } = req.query;
   let query = `
     SELECT q.*, u.username, u.role, 
@@ -134,236 +135,237 @@ app.get('/api/questions', (req, res) => {
     WHERE 1=1
   `;
   const params = [];
+  let paramIndex = 1;
 
   if (section) {
-    query += " AND q.section = ?";
+    query += ` AND q.section = $${paramIndex}`;
     params.push(section);
+    paramIndex++;
   }
   if (category) {
-    query += " AND q.category = ?";
+    query += ` AND q.category = $${paramIndex}`;
     params.push(category);
+    paramIndex++;
   }
   if (search) {
-    query += " AND (q.title LIKE ? OR q.content LIKE ?)";
-    params.push(`%${search}%`, `%${search}%`);
+    query += ` AND (q.title ILIKE $${paramIndex} OR q.content ILIKE $${paramIndex})`;
+    params.push(`%${search}%`);
+    paramIndex++;
   }
 
   query += " ORDER BY q.created_at DESC";
 
-  db.all(query, params, (err, rows) => {
-    if (err) {
-      return res.status(500).json({ error: err.message });
-    }
-    res.json(rows);
-  });
+  try {
+    const result = await pool.query(query, params);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.get('/api/questions/:id', (req, res) => {
+app.get('/api/questions/:id', async (req, res) => {
   const questionId = req.params.id;
 
-  db.get(`
-    SELECT q.*, u.username, u.role 
-    FROM questions q 
-    JOIN users u ON q.user_id = u.id 
-    WHERE q.id = ?`,
-    [questionId],
-    (err, question) => {
-      if (err) {
-        return res.status(500).json({ error: err.message });
-      }
-      if (!question) {
-        return res.status(404).json({ error: "Question not found" });
-      }
-
-      db.all(`
-        SELECT a.*, u.username, u.role 
-        FROM answers a 
-        JOIN users u ON a.user_id = u.id 
-        WHERE a.question_id = ? 
-        ORDER BY a.created_at`,
-        [questionId],
-        (err, answers) => {
-          if (err) {
-            return res.status(500).json({ error: err.message });
-          }
-          res.json({ question, answers });
-        }
-      );
-    }
-  );
-});
-
-app.post('/api/questions', (req, res) => {
-  const { title, content, category, user_id, section } = req.body;
-
-  db.run("INSERT INTO questions (title, content, category, user_id, section) VALUES (?, ?, ?, ?, ?)",
-    [title, content, category, user_id, section],
-    function(err) {
-      if (err) {
-        return res.status(500).json({ error: err.message });
-      }
-      res.json({ id: this.lastID, title, content, category, user_id, section });
-    }
-  );
-});
-
-app.put('/api/questions/:id', (req, res) => {
-  const { title, content, category, status, user_id } = req.body;
-  const questionId = req.params.id;
-
-  db.get("SELECT * FROM questions WHERE id = ?", [questionId], (err, question) => {
-    if (err) {
-      return res.status(500).json({ error: err.message });
-    }
+  try {
+    const questionResult = await pool.query(`
+      SELECT q.*, u.username, u.role 
+      FROM questions q 
+      JOIN users u ON q.user_id = u.id 
+      WHERE q.id = $1`,
+      [questionId]
+    );
+    
+    const question = questionResult.rows[0];
     if (!question) {
       return res.status(404).json({ error: "Question not found" });
     }
-    if (question.user_id !== user_id && req.body.role !== 'teacher') {
+
+    const answersResult = await pool.query(`
+      SELECT a.*, u.username, u.role 
+      FROM answers a 
+      JOIN users u ON a.user_id = u.id 
+      WHERE a.question_id = $1 
+      ORDER BY a.created_at`,
+      [questionId]
+    );
+
+    res.json({ question, answers: answersResult.rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/questions', async (req, res) => {
+  const { title, content, category, user_id, section } = req.body;
+
+  try {
+    const result = await pool.query(
+      "INSERT INTO questions (title, content, category, user_id, section) VALUES ($1, $2, $3, $4, $5) RETURNING id",
+      [title, content, category, user_id, section]
+    );
+    res.json({ id: result.rows[0].id, title, content, category, user_id, section });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/questions/:id', async (req, res) => {
+  const { title, content, category, status, user_id, role } = req.body;
+  const questionId = req.params.id;
+
+  try {
+    const questionResult = await pool.query("SELECT * FROM questions WHERE id = $1", [questionId]);
+    const question = questionResult.rows[0];
+    
+    if (!question) {
+      return res.status(404).json({ error: "Question not found" });
+    }
+    if (question.user_id !== parseInt(user_id) && role !== 'teacher') {
       return res.status(403).json({ error: "Not authorized" });
     }
 
-    db.run("UPDATE questions SET title = ?, content = ?, category = ?, status = ? WHERE id = ?",
-      [title, content, category, status, questionId],
-      function(err) {
-        if (err) {
-          return res.status(500).json({ error: err.message });
-        }
-        res.json({ success: true });
-      }
+    await pool.query(
+      "UPDATE questions SET title = $1, content = $2, category = $3, status = $4 WHERE id = $5",
+      [title, content, category, status, questionId]
     );
-  });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.delete('/api/questions/:id', (req, res) => {
+app.delete('/api/questions/:id', async (req, res) => {
   const { user_id, role } = req.body;
   const questionId = req.params.id;
 
-  db.get("SELECT * FROM questions WHERE id = ?", [questionId], (err, question) => {
-    if (err) {
-      return res.status(500).json({ error: err.message });
-    }
+  try {
+    const questionResult = await pool.query("SELECT * FROM questions WHERE id = $1", [questionId]);
+    const question = questionResult.rows[0];
+    
     if (!question) {
       return res.status(404).json({ error: "Question not found" });
     }
-    if (question.user_id !== user_id && role !== 'teacher') {
+    if (question.user_id !== parseInt(user_id) && role !== 'teacher') {
       return res.status(403).json({ error: "Not authorized" });
     }
 
-    db.run("DELETE FROM answers WHERE question_id = ?", [questionId]);
-    db.run("DELETE FROM notifications WHERE question_id = ?", [questionId]);
-    db.run("DELETE FROM follows WHERE question_id = ?", [questionId]);
-    db.run("DELETE FROM questions WHERE id = ?", [questionId], function(err) {
-      if (err) {
-        return res.status(500).json({ error: err.message });
-      }
-      res.json({ success: true });
-    });
-  });
+    await pool.query("DELETE FROM answers WHERE question_id = $1", [questionId]);
+    await pool.query("DELETE FROM notifications WHERE question_id = $1", [questionId]);
+    await pool.query("DELETE FROM follows WHERE question_id = $1", [questionId]);
+    await pool.query("DELETE FROM questions WHERE id = $1", [questionId]);
+    
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.post('/api/questions/:id/answers', (req, res) => {
+app.post('/api/questions/:id/answers', async (req, res) => {
   const { content, user_id } = req.body;
   const questionId = req.params.id;
 
-  db.run("INSERT INTO answers (content, question_id, user_id) VALUES (?, ?, ?)",
-    [content, questionId, user_id],
-    function(err) {
-      if (err) {
-        return res.status(500).json({ error: err.message });
-      }
-      
-      db.get("SELECT user_id FROM questions WHERE id = ?", [questionId], (err, question) => {
-        if (!err && question && question.user_id !== user_id) {
-          db.run("INSERT INTO notifications (user_id, question_id, message) VALUES (?, ?, ?)",
-            [question.user_id, questionId, "您的问题收到了新回答"]);
-        }
-      });
-
-      res.json({ id: this.lastID, content, question_id: questionId, user_id });
+  try {
+    const result = await pool.query(
+      "INSERT INTO answers (content, question_id, user_id) VALUES ($1, $2, $3) RETURNING id",
+      [content, questionId, user_id]
+    );
+    
+    const questionResult = await pool.query("SELECT user_id FROM questions WHERE id = $1", [questionId]);
+    const question = questionResult.rows[0];
+    
+    if (question && question.user_id !== parseInt(user_id)) {
+      await pool.query(
+        "INSERT INTO notifications (user_id, question_id, message) VALUES ($1, $2, $3)",
+        [question.user_id, questionId, "您的问题收到了新回答"]
+      );
     }
-  );
+
+    res.json({ id: result.rows[0].id, content, question_id: questionId, user_id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.post('/api/questions/:id/follow', (req, res) => {
+app.post('/api/questions/:id/follow', async (req, res) => {
   const { user_id } = req.body;
   const questionId = req.params.id;
 
-  db.run("INSERT OR IGNORE INTO follows (question_id, user_id) VALUES (?, ?)",
-    [questionId, user_id],
-    function(err) {
-      if (err) {
-        return res.status(500).json({ error: err.message });
-      }
-      res.json({ success: true });
-    }
-  );
+  try {
+    await pool.query(
+      "INSERT INTO follows (question_id, user_id) VALUES ($1, $2) ON CONFLICT (question_id, user_id) DO NOTHING",
+      [questionId, user_id]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.delete('/api/questions/:id/follow', (req, res) => {
+app.delete('/api/questions/:id/follow', async (req, res) => {
   const { user_id } = req.body;
   const questionId = req.params.id;
 
-  db.run("DELETE FROM follows WHERE question_id = ? AND user_id = ?",
-    [questionId, user_id],
-    function(err) {
-      if (err) {
-        return res.status(500).json({ error: err.message });
-      }
-      res.json({ success: true });
-    }
-  );
+  try {
+    await pool.query(
+      "DELETE FROM follows WHERE question_id = $1 AND user_id = $2",
+      [questionId, user_id]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.get('/api/notifications/:user_id', (req, res) => {
+app.get('/api/notifications/:user_id', async (req, res) => {
   const userId = req.params.user_id;
 
-  db.all("SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC",
-    [userId],
-    (err, rows) => {
-      if (err) {
-        return res.status(500).json({ error: err.message });
-      }
-      res.json(rows);
-    }
-  );
+  try {
+    const result = await pool.query(
+      "SELECT * FROM notifications WHERE user_id = $1 ORDER BY created_at DESC",
+      [userId]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.put('/api/notifications/:id/read', (req, res) => {
-  db.run("UPDATE notifications SET is_read = 1 WHERE id = ?", [req.params.id], function(err) {
-    if (err) {
-      return res.status(500).json({ error: err.message });
-    }
+app.put('/api/notifications/:id/read', async (req, res) => {
+  try {
+    await pool.query("UPDATE notifications SET is_read = 1 WHERE id = $1", [req.params.id]);
     res.json({ success: true });
-  });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.get('/api/users', (req, res) => {
+app.get('/api/users', async (req, res) => {
   const { role } = req.query;
   let query = "SELECT id, username, role, created_at FROM users";
   const params = [];
   
   if (role) {
-    query += " WHERE role = ?";
+    query += " WHERE role = $1";
     params.push(role);
   }
   
   query += " ORDER BY created_at DESC";
 
-  db.all(query, params, (err, rows) => {
-    if (err) {
-      return res.status(500).json({ error: err.message });
-    }
-    res.json(rows);
-  });
+  try {
+    const result = await pool.query(query, params);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.delete('/api/users/:id', (req, res) => {
-  db.run("DELETE FROM users WHERE id = ?", [req.params.id], function(err) {
-    if (err) {
-      return res.status(500).json({ error: err.message });
-    }
+app.delete('/api/users/:id', async (req, res) => {
+  try {
+    await pool.query("DELETE FROM users WHERE id = $1", [req.params.id]);
     res.json({ success: true });
-  });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('*', (req, res) => {
@@ -371,5 +373,5 @@ app.get('*', (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
